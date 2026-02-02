@@ -1,4 +1,4 @@
-# 🏠 SuperHote PMS V2 - Système Complet
+# 🏠 FULLBNBZEN-os - Système Complet
 
 > **PMS professionnel multi-propriétaires avec Livret d'accueil, Boutique d'upsell, Portails propriétaire/prestataire, Moteur de règles et IA intégrée**
 
