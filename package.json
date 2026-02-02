@@ -1,9 +1,10 @@
 {
-  "name": "superhote-pms-v2",
+  "name": "fullbnbzen-os",
   "version": "2.0.0",
   "description": "PMS complet multi-propriétaires avec Livret, Boutique, Portails, Rule Engine et IA",
   "private": true,
   "scripts": {
+    "install": "npm install --legacy-peer-deps",
     "dev": "next dev",
     "dev:admin": "next dev --port 3000",
     "dev:owner": "next dev --port 3001",
