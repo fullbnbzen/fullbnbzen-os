@@ -1,0 +1,1294 @@
+// SuperHote PMS V2 - Schema Prisma Complet
+// Multi-propriétaires, Multi-logements, Livret, Boutique, Portails, IA
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ==================== UTILISATEURS & AUTHENTIFICATION ====================
+
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  passwordHash  String
+  
+  firstName     String
+  lastName      String
+  phone         String?
+  avatar        String?
+  
+  role          UserRole
+  isActive      Boolean   @default(true)
+  
+  // Relations selon rôle
+  conciergeProfile    ConciergeProfile?
+  ownerProfile        OwnerProfile?
+  serviceProviderProfile ServiceProviderProfile?
+  
+  // Activités
+  auditLogs     AuditLog[]
+  messages      Message[]
+  notifications Notification[]
+  
+  // Sécurité
+  lastLoginAt   DateTime?
+  loginAttempts Int       @default(0)
+  lockedUntil   DateTime?
+  
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  
+  @@index([email])
+  @@index([role])
+}
+
+enum UserRole {
+  SUPER_ADMIN       // Admin plateforme
+  CONCIERGE_ADMIN   // Admin conciergerie
+  CONCIERGE_STAFF   // Équipe conciergerie
+  OWNER             // Propriétaire
+  SERVICE_PROVIDER  // Prestataire ménage
+  GUEST             // Voyageur (accès limité)
+}
+
+// Profil Conciergerie
+model ConciergeProfile {
+  id              String   @id @default(cuid())
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId          String   @unique
+  
+  concierge       Concierge @relation(fields: [conciergeId], references: [id])
+  conciergeId     String
+  
+  position        String?  // Manager, Agent, etc.
+  permissions     Json     // Permissions granulaires
+  
+  assignedProperties Property[] @relation("AssignedStaff")
+  assignedTasks      Task[]     @relation("AssignedTasks")
+  
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+// Profil Propriétaire
+model OwnerProfile {
+  id              String     @id @default(cuid())
+  user            User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId          String     @unique
+  
+  company         String?
+  siret           String?
+  address         String?
+  
+  // Relations
+  properties      PropertyOwnership[]
+  
+  // Paramètres portail
+  dashboardSettings Json?
+  notificationPrefs Json?
+  
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+}
+
+// Profil Prestataire
+model ServiceProviderProfile {
+  id              String   @id @default(cuid())
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId          String   @unique
+  
+  company         String?
+  specialties     Json     // ["cleaning", "maintenance", "gardening"]
+  serviceArea     Json     // Zones géographiques
+  
+  rating          Float?
+  totalTasks      Int      @default(0)
+  
+  // Relations
+  assignedTasks   Task[]   @relation("ProviderTasks")
+  
+  // App mobile
+  deviceToken     String?  // Pour notifications push
+  
+  isAvailable     Boolean  @default(true)
+  
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+// ==================== CONCIERGERIE (ORGANISATION) ====================
+
+model Concierge {
+  id              String   @id @default(cuid())
+  
+  name            String
+  legalName       String?
+  siret           String?
+  
+  email           String
+  phone           String
+  address         String?
+  
+  logo            String?
+  website         String?
+  
+  // Configuration
+  settings        Json     // Paramètres généraux
+  branding        Json?    // Couleurs, fonts pour livret/boutique
+  
+  // Relations
+  staff           ConciergeProfile[]
+  properties      Property[]
+  ruleEngine      RuleEngineConfig[]
+  
+  // Finances
+  commissionRate  Float    @default(0) // % commission par défaut
+  
+  isActive        Boolean  @default(true)
+  
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  
+  @@index([siret])
+}
+
+// ==================== LOGEMENTS (ENTITÉ CENTRALE) ====================
+
+model Property {
+  id              String   @id @default(cuid())
+  
+  // Identité
+  name            String
+  internalCode    String?  @unique // Code interne conciergerie
+  type            PropertyType
+  
+  // Adresse
+  address         String
+  addressLine2    String?
+  city            String
+  postalCode      String
+  country         String   @default("France")
+  latitude        Float?
+  longitude       Float?
+  
+  // Caractéristiques
+  bedrooms        Int
+  bathrooms       Int
+  maxGuests       Int
+  surface         Float?   // m²
+  floor           Int?
+  
+  // Statut
+  status          PropertyStatus @default(DRAFT)
+  
+  // Paramètres réservation
+  checkInTime     String   @default("15:00")
+  checkOutTime    String   @default("11:00")
+  minStay         Int      @default(1)
+  maxStay         Int?
+  
+  // Tarification
+  basePrice       Float
+  cleaningFee     Float    @default(0)
+  securityDeposit Float    @default(0)
+  
+  // Contenu
+  description     String?  @db.Text
+  amenities       Json?    // ["wifi", "parking", "pool"]
+  houseRules      Json?
+  photos          Json?    // [{url, caption, order}]
+  
+  // Accès
+  accessInstructions String? @db.Text
+  wifiSSID        String?
+  wifiPassword    String?
+  doorCode        String?
+  keyLocation     String?
+  
+  // Relations
+  concierge       Concierge @relation(fields: [conciergeId], references: [id])
+  conciergeId     String
+  
+  ownership       PropertyOwnership[]
+  
+  assignedStaff   ConciergeProfile[] @relation("AssignedStaff")
+  
+  // Fonctionnalités
+  reservations    Reservation[]
+  guestBooklet    GuestBooklet?
+  shop            PropertyShop?
+  checklists      ChecklistTemplate[]
+  tasks           Task[]
+  incidents       Incident[]
+  
+  // Canaux de distribution
+  channelConnections ChannelConnection[]
+  
+  // Analytics
+  totalRevenue    Float    @default(0)
+  totalBookings   Int      @default(0)
+  averageRating   Float?
+  
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  
+  @@index([conciergeId])
+  @@index([status])
+  @@index([city])
+}
+
+enum PropertyType {
+  APARTMENT
+  HOUSE
+  VILLA
+  STUDIO
+  LOFT
+  CHALET
+  CASTLE
+  BOAT
+  OTHER
+}
+
+enum PropertyStatus {
+  DRAFT
+  ACTIVE
+  MAINTENANCE
+  BLOCKED
+  ARCHIVED
+}
+
+// Propriété multi-propriétaires
+model PropertyOwnership {
+  id              String   @id @default(cuid())
+  
+  property        Property @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  propertyId      String
+  
+  owner           OwnerProfile @relation(fields: [ownerId], references: [id])
+  ownerId         String
+  
+  ownershipPercent Float   @default(100) // % de propriété
+  
+  // Finances
+  revenueShare    Float    @default(100) // % des revenus
+  
+  startDate       DateTime @default(now())
+  endDate         DateTime?
+  
+  isActive        Boolean  @default(true)
+  
+  createdAt       DateTime @default(now())
+  
+  @@unique([propertyId, ownerId])
+  @@index([propertyId])
+  @@index([ownerId])
+}
+
+// ==================== CANAUX DE DISTRIBUTION ====================
+
+model ChannelConnection {
+  id              String   @id @default(cuid())
+  
+  property        Property @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  propertyId      String
+  
+  channel         BookingChannel
+  
+  externalId      String   // ID sur la plateforme
+  listingUrl      String?
+  
+  syncEnabled     Boolean  @default(true)
+  icalUrl         String?
+  
+  settings        Json?    // Paramètres spécifiques canal
+  
+  lastSyncAt      DateTime?
+  syncStatus      String?
+  
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  
+  @@unique([propertyId, channel])
+  @@index([propertyId])
+}
+
+enum BookingChannel {
+  DIRECT
+  AIRBNB
+  BOOKING_COM
+  VRBO
+  EXPEDIA
+  ABRITEL
+  GITES_DE_FRANCE
+  OTHER
+}
+
+// ==================== VOYAGEURS ====================
+
+model Guest {
+  id              String   @id @default(cuid())
+  
+  // Identité
+  firstName       String
+  lastName        String
+  email           String   @unique
+  phone           String?
+  
+  // Localisation
+  country         String?
+  language        String   @default("fr")
+  
+  // Documents (RGPD compliant)
+  dateOfBirth     DateTime?
+  nationality     String?
+  passportNumber  String?  // Chiffré
+  idCardNumber    String?  // Chiffré
+  
+  // Préférences
+  preferences     Json?
+  specialNeeds    Json?
+  
+  // Statistiques
+  totalStays      Int      @default(0)
+  totalSpent      Float    @default(0)
+  averageRating   Float?
+  isVip           Boolean  @default(false)
+  
+  // Relations
+  reservations    Reservation[]
+  messages        Message[]
+  shopOrders      ShopOrder[]
+  
+  // Consentements RGPD
+  marketingConsent Boolean @default(false)
+  dataRetentionConsent Boolean @default(true)
+  
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  
+  @@index([email])
+}
+
+// ==================== RÉSERVATIONS (PIVOT CENTRAL) ====================
+
+model Reservation {
+  id              String   @id @default(cuid())
+  
+  // Relations principales
+  property        Property @relation(fields: [propertyId], references: [id])
+  propertyId      String
+  
+  guest           Guest    @relation(fields: [guestId], references: [id])
+  guestId         String
+  
+  // Dates
+  checkIn         DateTime
+  checkOut        DateTime
+  nights          Int
+  
+  // Participants
+  adults          Int      @default(1)
+  children        Int      @default(0)
+  babies          Int      @default(0)
+  pets            Int      @default(0)
+  
+  // Statut
+  status          ReservationStatus @default(PENDING)
+  
+  // Source
+  channel         BookingChannel @default(DIRECT)
+  externalId      String?  // ID Airbnb/Booking
+  bookingReference String  @unique // Ref unique
+  
+  // Tarification
+  basePrice       Float    // Prix/nuit
+  totalNights     Float    // Total nuitées
+  cleaningFee     Float    @default(0)
+  serviceFee      Float    @default(0)
+  platformFee     Float    @default(0)
+  taxes           Float    @default(0)
+  discount        Float    @default(0)
+  totalPrice      Float    // Total final
+  
+  // Caution
+  securityDeposit Float    @default(0)
+  depositStatus   DepositStatus @default(NOT_REQUIRED)
+  depositPaidAt   DateTime?
+  depositRefundedAt DateTime?
+  
+  // Communication
+  specialRequests String?  @db.Text
+  internalNotes   String?  @db.Text
+  guestNotes      String?  @db.Text
+  
+  // Accès
+  accessToken     String   @unique // Token sécurisé pour livret
+  accessCode      String?  // Code porte
+  
+  checkInInstructionsSent Boolean @default(false)
+  checkInInstructionsSentAt DateTime?
+  
+  // Relations fonctionnelles
+  payments        Payment[]
+  tasks           Task[]
+  messages        Message[]
+  incidents       Incident[]
+  shopOrders      ShopOrder[]
+  guestBookletAccess GuestBookletAccess?
+  
+  // Audit
+  auditLogs       AuditLog[]
+  
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  
+  @@index([propertyId])
+  @@index([guestId])
+  @@index([status])
+  @@index([checkIn, checkOut])
+  @@index([channel])
+  @@index([accessToken])
+}
+
+enum ReservationStatus {
+  PENDING           // En attente confirmation
+  CONFIRMED         // Confirmée
+  CHECKED_IN        // Client arrivé
+  CHECKED_OUT       // Client parti
+  CANCELLED         // Annulée
+  NO_SHOW           // Client absent
+  COMPLETED         // Terminée (après check-out)
+}
+
+enum DepositStatus {
+  NOT_REQUIRED      // Pas de caution
+  REQUIRED          // Requise
+  PENDING           // En attente paiement
+  PAID              // Payée
+  REFUNDED          // Remboursée
+  WITHHELD          // Retenue (dommages)
+  PARTIALLY_REFUNDED // Partiellement remboursée
+}
+
+// ==================== LIVRET D'ACCUEIL DIGITAL ====================
+
+model GuestBooklet {
+  id              String   @id @default(cuid())
+  
+  property        Property @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  propertyId      String   @unique
+  
+  // Contenu structuré (éditable back-office uniquement)
+  welcomeMessage  String?  @db.Text
+  
+  sections        Json     // [{type, title, content, order}]
+  // Types: welcome, house_rules, wifi, access, local_tips, emergency, checkout
+  
+  // Multilingue
+  translations    Json?    // {en: {...}, es: {...}}
+  defaultLanguage String   @default("fr")
+  
+  // Design
+  coverImage      String?
+  theme           Json?    // Couleurs, fonts héritées de concierge
+  
+  // FAQ IA
+  faqEnabled      Boolean  @default(true)
+  faqKnowledgeBase Json?   // Base de connaissance pour RAG
+  
+  isActive        Boolean  @default(true)
+  
+  // Analytics
+  totalViews      Int      @default(0)
+  
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  
+  // Relations
+  accesses        GuestBookletAccess[]
+}
+
+// Accès voyageur au livret (1 par réservation)
+model GuestBookletAccess {
+  id              String   @id @default(cuid())
+  
+  booklet         GuestBooklet @relation(fields: [bookletId], references: [id])
+  bookletId       String
+  
+  reservation     Reservation @relation(fields: [reservationId], references: [id], onDelete: Cascade)
+  reservationId   String   @unique
+  
+  // Personnalisation
+  language        String   @default("fr")
+  customMessage   String?  @db.Text
+  
+  // Tracking
+  firstViewedAt   DateTime?
+  lastViewedAt    DateTime?
+  viewCount       Int      @default(0)
+  
+  // Interactions IA
+  aiConversations Json?    // Historique chat
+  
+  createdAt       DateTime @default(now())
+  
+  @@index([bookletId])
+  @@index([reservationId])
+}
+
+// ==================== BOUTIQUE D'UPSELL ====================
+
+model PropertyShop {
+  id              String   @id @default(cuid())
+  
+  property        Property @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  propertyId      String   @unique
+  
+  isActive        Boolean  @default(true)
+  
+  // Configuration
+  welcomeMessage  String?
+  theme           Json?
+  
+  // Produits
+  products        ShopProduct[]
+  orders          ShopOrder[]
+  
+  // Analytics
+  totalRevenue    Float    @default(0)
+  totalOrders     Int      @default(0)
+  
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+model ShopProduct {
+  id              String   @id @default(cuid())
+  
+  shop            PropertyShop @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  shopId          String
+  
+  // Produit
+  name            String
+  description     String   @db.Text
+  category        ProductCategory
+  
+  price           Float
+  currency        String   @default("EUR")
+  
+  image           String?
+  
+  // Disponibilité
+  isActive        Boolean  @default(true)
+  stockManaged    Boolean  @default(false)
+  stock           Int?
+  
+  // Restrictions temporelles
+  availableFrom   DateTime?
+  availableUntil  DateTime?
+  
+  // Impact opérationnel
+  generateTask    Boolean  @default(false)
+  taskType        TaskType?
+  taskInstructions String? @db.Text
+  
+  // Analytics
+  totalSold       Int      @default(0)
+  revenue         Float    @default(0)
+  
+  // Relations
+  orderItems      ShopOrderItem[]
+  
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  
+  @@index([shopId])
+  @@index([category])
+  @@index([isActive])
+}
+
+enum ProductCategory {
+  EARLY_CHECKIN
+  LATE_CHECKOUT
+  BREAKFAST
+  WELCOME_BASKET
+  CLEANING_EXTRA
+  LINEN_EXTRA
+  PARKING
+  BIKE_RENTAL
+  TRANSFER
+  EXPERIENCE
+  OTHER
+}
+
+model ShopOrder {
+  id              String   @id @default(cuid())
+  
+  shop            PropertyShop @relation(fields: [shopId], references: [id])
+  shopId          String
+  
+  reservation     Reservation @relation(fields: [reservationId], references: [id])
+  reservationId   String
+  
+  guest           Guest    @relation(fields: [guestId], references: [id])
+  guestId         String
+  
+  orderNumber     String   @unique
+  
+  status          OrderStatus @default(PENDING)
+  
+  // Montants
+  subtotal        Float
+  tax             Float    @default(0)
+  total           Float
+  
+  // Paiement
+  paymentStatus   PaymentStatus @default(PENDING)
+  paidAt          DateTime?
+  
+  // Items
+  items           ShopOrderItem[]
+  
+  // Tâches générées
+  generatedTasks  Task[]   @relation("OrderTasks")
+  
+  // Notes
+  customerNotes   String?
+  internalNotes   String?
+  
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  
+  @@index([shopId])
+  @@index([reservationId])
+  @@index([status])
+}
+
+enum OrderStatus {
+  PENDING
+  CONFIRMED
+  PROCESSING
+  COMPLETED
+  CANCELLED
+  REFUNDED
+}
+
+model ShopOrderItem {
+  id              String   @id @default(cuid())
+  
+  order           ShopOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  orderId         String
+  
+  product         ShopProduct @relation(fields: [productId], references: [id])
+  productId       String
+  
+  quantity        Int      @default(1)
+  price           Float    // Prix au moment de l'achat
+  
+  createdAt       DateTime @default(now())
+  
+  @@index([orderId])
+  @@index([productId])
+}
+
+// ==================== PAIEMENTS ====================
+
+model Payment {
+  id              String   @id @default(cuid())
+  
+  reservation     Reservation @relation(fields: [reservationId], references: [id])
+  reservationId   String
+  
+  type            PaymentType
+  status          PaymentStatus @default(PENDING)
+  
+  amount          Float
+  currency        String   @default("EUR")
+  
+  method          PaymentMethod
+  
+  // IDs externes
+  stripePaymentId String?  @unique
+  stripeIntentId  String?
+  
+  // Métadonnées
+  description     String?
+  metadata        Json?
+  
+  // Dates
+  paidAt          DateTime?
+  refundedAt      DateTime?
+  refundAmount    Float?
+  
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  
+  @@index([reservationId])
+  @@index([status])
+  @@index([type])
+}
+
+enum PaymentType {
+  RESERVATION_DEPOSIT
+  RESERVATION_BALANCE
+  RESERVATION_FULL
+  SECURITY_DEPOSIT
+  SHOP_ORDER
+  EXTRA_CHARGES
+  REFUND
+}
+
+enum PaymentStatus {
+  PENDING
+  PROCESSING
+  SUCCEEDED
+  FAILED
+  REFUNDED
+  PARTIALLY_REFUNDED
+  CANCELLED
+}
+
+enum PaymentMethod {
+  STRIPE_CARD
+  STRIPE_SEPA
+  BANK_TRANSFER
+  CASH
+  PAYPAL
+  OTHER
+}
+
+// ==================== TÂCHES & OPÉRATIONS ====================
+
+model Task {
+  id              String   @id @default(cuid())
+  
+  property        Property @relation(fields: [propertyId], references: [id])
+  propertyId      String
+  
+  reservation     Reservation? @relation(fields: [reservationId], references: [id])
+  reservationId   String?
+  
+  shopOrder       ShopOrder? @relation("OrderTasks", fields: [shopOrderId], references: [id])
+  shopOrderId     String?
+  
+  type            TaskType
+  title           String
+  description     String?  @db.Text
+  
+  // Assignation
+  assignedTo      ServiceProviderProfile? @relation("ProviderTasks", fields: [assignedToId], references: [id])
+  assignedToId    String?
+  
+  assignedStaff   ConciergeProfile? @relation("AssignedTasks", fields: [assignedStaffId], references: [id])
+  assignedStaffId String?
+  
+  status          TaskStatus @default(PENDING)
+  priority        TaskPriority @default(MEDIUM)
+  
+  // Planification
+  dueDate         DateTime
+  dueTime         String?  // HH:MM
+  
+  estimatedDuration Int?   // minutes
+  actualDuration    Int?
+  
+  // Exécution
+  startedAt       DateTime?
+  completedAt     DateTime?
+  validatedAt     DateTime?
+  validatedBy     String?  // userId
+  
+  // Checklist
+  checklist       TaskChecklist?
+  
+  // Incidents liés
+  incidents       Incident[]
+  
+  // Notes
+  providerNotes   String?  @db.Text
+  validationNotes String?  @db.Text
+  
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  
+  @@index([propertyId])
+  @@index([reservationId])
+  @@index([assignedToId])
+  @@index([status])
+  @@index([dueDate])
+}
+
+enum TaskType {
+  CLEANING
+  DEEP_CLEANING
+  LINEN_CHANGE
+  MAINTENANCE
+  INSPECTION
+  KEY_HANDOVER
+  WELCOME_SETUP
+  CHECKOUT_INSPECTION
+  RESTOCKING
+  GARDENING
+  POOL_MAINTENANCE
+  SHOP_ORDER_DELIVERY
+  OTHER
+}
+
+enum TaskStatus {
+  PENDING
+  ASSIGNED
+  ACCEPTED
+  IN_PROGRESS
+  COMPLETED
+  VALIDATED
+  REJECTED
+  CANCELLED
+}
+
+enum TaskPriority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+  CRITICAL
+}
+
+// ==================== CHECKLISTS ====================
+
+model ChecklistTemplate {
+  id              String   @id @default(cuid())
+  
+  property        Property @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  propertyId      String
+  
+  name            String
+  type            TaskType
+  
+  items           Json     // [{id, label, required, requiresPhoto, order}]
+  
+  isActive        Boolean  @default(true)
+  
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  
+  @@index([propertyId])
+  @@index([type])
+}
+
+model TaskChecklist {
+  id              String   @id @default(cuid())
+  
+  task            Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  taskId          String   @unique
+  
+  items           Json     // [{id, label, checked, photoUrl, note, timestamp}]
+  
+  photosBefore    Json?    // URLs photos avant
+  photosAfter     Json?    // URLs photos après
+  
+  completedAt     DateTime?
+  
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+// ==================== INCIDENTS ====================
+
+model Incident {
+  id              String   @id @default(cuid())
+  
+  property        Property @relation(fields: [propertyId], references: [id])
+  propertyId      String
+  
+  reservation     Reservation? @relation(fields: [reservationId], references: [id])
+  reservationId   String?
+  
+  task            Task?    @relation(fields: [taskId], references: [id])
+  taskId          String?
+  
+  type            IncidentType
+  severity        IncidentSeverity
+  status          IncidentStatus @default(OPEN)
+  
+  title           String
+  description     String   @db.Text
+  
+  photos          Json?    // URLs
+  
+  // Résolution
+  resolution      String?  @db.Text
+  resolvedAt      DateTime?
+  resolvedBy      String?  // userId
+  
+  // Coûts
+  estimatedCost   Float?
+  actualCost      Float?
+  
+  // Visibilité
+  visibleToOwner  Boolean  @default(false)
+  notifyOwner     Boolean  @default(false)
+  
+  reportedBy      String   // userId ou "system"
+  
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  
+  @@index([propertyId])
+  @@index([reservationId])
+  @@index([status])
+  @@index([severity])
+}
+
+enum IncidentType {
+  CLEANLINESS
+  DAMAGE
+  MAINTENANCE
+  EQUIPMENT_FAILURE
+  MISSING_ITEMS
+  NOISE_COMPLAINT
+  SAFETY_ISSUE
+  PEST_CONTROL
+  OTHER
+}
+
+enum IncidentSeverity {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum IncidentStatus {
+  OPEN
+  IN_PROGRESS
+  RESOLVED
+  CLOSED
+  ESCALATED
+}
+
+// ==================== MESSAGES ====================
+
+model Message {
+  id              String   @id @default(cuid())
+  
+  reservation     Reservation @relation(fields: [reservationId], references: [id])
+  reservationId   String
+  
+  guest           Guest    @relation(fields: [guestId], references: [id])
+  guestId         String
+  
+  sender          MessageSender
+  senderUser      User?    @relation(fields: [senderUserId], references: [id])
+  senderUserId    String?
+  
+  content         String   @db.Text
+  
+  // IA
+  isAiGenerated   Boolean  @default(false)
+  aiPrompt        String?  @db.Text
+  aiModel         String?
+  intent          String?
+  confidence      Float?
+  
+  // Statut
+  status          MessageStatus @default(SENT)
+  readAt          DateTime?
+  
+  // Canal
+  channel         CommunicationChannel @default(EMAIL)
+  
+  // Pièces jointes
+  attachments     Json?
+  
+  createdAt       DateTime @default(now())
+  
+  @@index([reservationId])
+  @@index([guestId])
+  @@index([createdAt])
+}
+
+enum MessageSender {
+  GUEST
+  CONCIERGE_STAFF
+  SYSTEM
+  AI_ASSISTANT
+}
+
+enum MessageStatus {
+  DRAFT
+  SENT
+  DELIVERED
+  READ
+  FAILED
+}
+
+enum CommunicationChannel {
+  EMAIL
+  SMS
+  WHATSAPP
+  IN_APP
+}
+
+// ==================== MOTEUR DE RÈGLES ====================
+
+model RuleEngineConfig {
+  id              String   @id @default(cuid())
+  
+  concierge       Concierge @relation(fields: [conciergeId], references: [id])
+  conciergeId     String
+  
+  ruleType        RuleType
+  name            String
+  description     String?
+  
+  // Conditions
+  conditions      Json     // Conditions d'application
+  // Ex: {channel: "BOOKING_COM", depositAmount: 500}
+  
+  // Actions
+  actions         Json     // Actions à déclencher
+  // Ex: {blockCheckIn: true, sendReminder: true}
+  
+  priority        Int      @default(0)
+  isActive        Boolean  @default(true)
+  
+  // Application
+  appliesTo       String?  // "ALL", "PROPERTY_ID", etc.
+  propertyIds     Json?    // Liste IDs si spécifique
+  
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  
+  @@index([conciergeId])
+  @@index([ruleType])
+  @@index([isActive])
+}
+
+enum RuleType {
+  SECURITY_DEPOSIT      // Règles caution
+  AUTO_MESSAGING        // Messages automatiques
+  TASK_AUTOMATION       // Création auto tâches
+  PRICING               // Tarification
+  CALENDAR_BLOCKING     // Blocages calendrier
+  APPROVAL_WORKFLOW     // Workflows validation
+  NOTIFICATION          // Notifications
+  CUSTOM                // Personnalisée
+}
+
+// ==================== AUDIT LOG (TIMELINE) ====================
+
+model AuditLog {
+  id              String   @id @default(cuid())
+  
+  // Contexte
+  eventType       AuditEventType
+  category        String?
+  
+  // Entités liées
+  reservation     Reservation? @relation(fields: [reservationId], references: [id])
+  reservationId   String?
+  
+  propertyId      String?
+  guestId         String?
+  taskId          String?
+  
+  // Acteur
+  user            User?    @relation(fields: [userId], references: [id])
+  userId          String?
+  actorType       String   // "USER", "SYSTEM", "AI", "GUEST"
+  actorName       String?
+  
+  // Détails
+  description     String
+  metadata        Json?    // Données supplémentaires
+  
+  // Modifications
+  before          Json?    // État avant
+  after           Json?    // État après
+  
+  // Contexte technique
+  ipAddress       String?
+  userAgent       String?
+  
+  timestamp       DateTime @default(now())
+  
+  @@index([reservationId])
+  @@index([propertyId])
+  @@index([eventType])
+  @@index([timestamp])
+  @@index([userId])
+}
+
+enum AuditEventType {
+  // Réservations
+  RESERVATION_CREATED
+  RESERVATION_MODIFIED
+  RESERVATION_CANCELLED
+  RESERVATION_CHECKED_IN
+  RESERVATION_CHECKED_OUT
+  
+  // Paiements
+  PAYMENT_INITIATED
+  PAYMENT_SUCCEEDED
+  PAYMENT_FAILED
+  PAYMENT_REFUNDED
+  DEPOSIT_PAID
+  DEPOSIT_REFUNDED
+  
+  // Communications
+  MESSAGE_SENT
+  MESSAGE_RECEIVED
+  AUTO_MESSAGE_SENT
+  
+  // Tâches
+  TASK_CREATED
+  TASK_ASSIGNED
+  TASK_STARTED
+  TASK_COMPLETED
+  TASK_VALIDATED
+  
+  // Incidents
+  INCIDENT_REPORTED
+  INCIDENT_RESOLVED
+  
+  // Boutique
+  SHOP_ORDER_PLACED
+  SHOP_ORDER_PAID
+  SHOP_ORDER_CANCELLED
+  
+  // Accès
+  BOOKLET_ACCESSED
+  BOOKLET_VIEWED
+  
+  // Système
+  RULE_TRIGGERED
+  AUTOMATION_EXECUTED
+  AI_INTERACTION
+  ADMIN_OVERRIDE
+  
+  // Sécurité
+  LOGIN_SUCCESS
+  LOGIN_FAILED
+  PASSWORD_CHANGED
+  PERMISSION_CHANGED
+}
+
+// ==================== NOTIFICATIONS ====================
+
+model Notification {
+  id              String   @id @default(cuid())
+  
+  user            User     @relation(fields: [userId], references: [id])
+  userId          String
+  
+  type            NotificationType
+  
+  title           String
+  message         String   @db.Text
+  
+  data            Json?    // Contexte additionnel
+  actionUrl       String?
+  
+  isRead          Boolean  @default(false)
+  readAt          DateTime?
+  
+  priority        NotificationPriority @default(NORMAL)
+  
+  createdAt       DateTime @default(now())
+  
+  @@index([userId])
+  @@index([isRead])
+  @@index([createdAt])
+}
+
+enum NotificationType {
+  NEW_RESERVATION
+  RESERVATION_MODIFIED
+  RESERVATION_CANCELLED
+  PAYMENT_RECEIVED
+  DEPOSIT_REQUIRED
+  TASK_ASSIGNED
+  TASK_COMPLETED
+  INCIDENT_REPORTED
+  SHOP_ORDER
+  MESSAGE_RECEIVED
+  AI_SUGGESTION
+  RULE_TRIGGERED
+  SYSTEM_ALERT
+}
+
+enum NotificationPriority {
+  LOW
+  NORMAL
+  HIGH
+  URGENT
+}
+
+// ==================== IA & ANALYTICS ====================
+
+model AIConversation {
+  id              String   @id @default(cuid())
+  
+  sessionId       String   @unique
+  
+  // Contexte
+  contextType     String   // "GUEST_SUPPORT", "ADMIN_ASSISTANT", "PROVIDER_HELP"
+  reservationId   String?
+  propertyId      String?
+  userId          String?
+  
+  // Conversation
+  messages        Json     // Historique complet
+  
+  // Métadonnées
+  model           String   // "gpt-4", "claude-3"
+  totalTokens     Int      @default(0)
+  
+  // Résolution
+  resolved        Boolean  @default(false)
+  escalated       Boolean  @default(false)
+  escalatedAt     DateTime?
+  
+  // Feedback
+  satisfaction    Int?     // 1-5
+  feedback        String?
+  
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  
+  @@index([contextType])
+  @@index([reservationId])
+}
+
+model AIKnowledgeBase {
+  id              String   @id @default(cuid())
+  
+  propertyId      String?  // null = global
+  
+  type            String   // "FAQ", "RULE", "PROCEDURE"
+  category        String?
+  
+  question        String
+  answer          String   @db.Text
+  
+  keywords        Json?    // Pour recherche
+  
+  language        String   @default("fr")
+  
+  isActive        Boolean  @default(true)
+  
+  // Analytics
+  timesUsed       Int      @default(0)
+  lastUsedAt      DateTime?
+  
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  
+  @@index([propertyId])
+  @@index([type])
+}
